@@ -1,118 +1,55 @@
+# The Hive — Realtime Chat
 
+A small room-based chat app with live messages, online presence, typing indicators, and persistent message history. The project is split into five practical areas: WebSocket routing (`app/main.py`), persistence (`app/database.py`), presence and typing (`ChatHub`), browser UI (`app/static`), and tests/deployment/demo materials.
 
-# Realtime Chat (WebSockets MVP)
+## Run locally
 
-A small chat app where messages appear instantly for everyone in the room, with no page refresh.
+Requires Python 3.10 or newer.
 
-**Features**
-
-- **Rooms**: separate chat spaces (`general`, `football`, `music`)
-- **Online presence**: a live list of who is in the room
-- **Typing indicators**: "Ada is typing..."
-- **Message history**: the last 50 messages are saved and shown when you join
-
-**Tech stack**: Python + FastAPI (WebSockets), SQLite (storage), plain HTML/CSS/JavaScript (UI).
-
-**Live demo:** 
-
----
-
-## How it works
-
-```
- Browser A ──┐                          ┌── SQLite file (messages, rooms)
-             ├── WebSocket ──> Server ──┤
- Browser B ──┘   (always open)          └── In-memory dictionary (who is online)
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
 ```
 
-1. A browser opens one WebSocket connection to the server and **keeps it open**.
-2. The browser sends small JSON messages. The server sends JSON messages back.
-3. The server remembers who is online in a dictionary: `{ "general": { "Ada": <connection> } }`.
-4. Chat messages are saved to SQLite so history survives restarts.
+Open http://localhost:8000. Choose a name and one of the seeded rooms: `general`, `football`, or `music`.
 
----
+## Configuration
 
-To Run it on your computer
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DB_PATH` | `chat.db` | SQLite database location |
+| `PORT` | `8000` | Listening port for `python -m app.main` and the Render start command |
 
-You need **Python 3.10 or newer**.
+See `.env.example`. SQLite persists history when the configured file is on durable storage. On hosts with ephemeral disks, provision a persistent disk and set `DB_PATH` to its mount path.
 
+## Architecture and data
 
-## Environment variables
+- FastAPI serves the page, room list, health check, and `/ws` WebSocket endpoint.
+- SQLite stores seeded rooms and messages; the newest 50 messages are sent when a user joins.
+- An in-process hub tracks each room's connected sockets. Presence and typing are transient and reset when the service restarts.
+- Messages are validated and saved before being broadcast. The browser uses `textContent` when rendering user content.
 
-| Variable  | Default   | What it does |
-|-----------|-----------|--------------|
-| `DB_PATH` | `chat.db` | Where the SQLite database file is stored |
-| `PORT`    | `8000`    | Port the server listens on (set by the hosting platform when deployed) |
-
-Both are optional. See `.env.example`.
-
----
-
-## Message protocol (the "language" client and server speak)
-
-**Client → Server**
-
-| `type`         | Extra fields             | Meaning |
-|----------------|--------------------------|---------|
-| `join_room`    | `username`, `room`       | "I want to enter this room" (must be the first message) |
-| `send_message` | `text`                   | "Send this to the room" |
-| `typing`       | `is_typing` (true/false) | "I started / stopped typing" |
-
-**Server → Client**
-
-| `type`            | Fields                                  | Meaning |
-|-------------------|-----------------------------------------|---------|
-| `history`         | `room`, `messages[]`                    | Old messages, sent once after joining |
-| `message`         | `id`, `room`, `username`, `text`, `created_at` | A new message |
-| `presence_update` | `room`, `users[]`                       | Who is online now |
-| `typing`          | `username`, `is_typing`                 | Someone started / stopped typing |
-| `error`           | `message`                               | Something was rejected (explains why) |
-
-## HTTP endpoints
-
-| Method | Path       | Purpose |
-|--------|------------|---------|
-| GET    | `/`        | The chat page |
-| GET    | `/rooms`   | List of rooms |
-| GET    | `/health`  | Health check + how many users are online per room |
-| WS     | `/ws`      | The WebSocket connection |
-
-## Data model
-
-```sql
-rooms (
-  id    INTEGER PRIMARY KEY AUTOINCREMENT,
-  name  TEXT UNIQUE NOT NULL
-)
-
-messages (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  room_id     INTEGER NOT NULL REFERENCES rooms(id),
-  username    TEXT NOT NULL,
-  text        TEXT NOT NULL,
-  created_at  TEXT NOT NULL      -- UTC timestamp
-)
+```text
+Browser ── WebSocket /ws ── FastAPI ── SQLite
+                             └── room membership and typing state
 ```
 
-Tables are created automatically on startup. Presence and typing are **not** stored; they only exist while people are connected.
+### Message protocol
 
----
+The first client event must be `{"type":"join_room","username":"Ada","room":"general"}`. After joining, clients send `send_message` with `text`, or `typing` with a boolean `is_typing`.
 
-## Validation and error handling
+Server events are `history` (`room`, `messages`), `message` (`id`, `room`, `username`, `text`, `created_at`), `presence_update` (`room`, `users`), `typing` (`username`, `is_typing`), and `error` (`message`).
 
-| Situation | What happens |
-|-----------|--------------|
-| Empty or whitespace-only message | Rejected with an error, not broadcast |
-| Message longer than 500 characters | Rejected with an error |
-| Username empty or longer than 20 characters | Rejected |
-| Room does not exist | Rejected |
-| Username already used in that room | Rejected |
-| Sending a message before joining | Rejected ("Join a room first") |
-| Invalid JSON / unknown message type | Rejected |
-| User closes the tab or loses connection | Removed from the online list, others are notified |
-| Someone tries to inject HTML in a message | Shown as plain text (the page uses `textContent`) |
+### HTTP endpoints
 
----
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/` | Chat UI |
+| GET | `/rooms` | Available rooms |
+| GET | `/health` | Health status and online counts |
+| WS | `/ws` | Chat connection |
 
 ## Tests
 
@@ -120,12 +57,26 @@ Tables are created automatically on startup. Presence and typing are **not** sto
 pytest -v
 ```
 
-**Test strategy**
+The suite checks a two-person conversation and persisted history, rejection of empty messages, room and JSON validation, typing broadcasts, and duplicate names. Each test uses an isolated temporary database.
 
-- **Happy path**: two users join the same room, one sends a message, both receive it.
-- **Major failure path**: an empty message is rejected with an error and is *not* sent to anyone.
-- **Extra checks**: unknown room, duplicate username, too-long message, sending before joining, bad JSON, history saved and shown to new users, rooms stay separate, typing events reach others only, presence updates when someone leaves.
+## Deploy to Render
 
-Each test uses its own temporary database, so tests never affect each other or real data.
+This repository includes `render.yaml`. Create a Render web service from the repository and attach a persistent disk at `/var/data`; set `DB_PATH=/var/data/chat.db` in the service environment (the blueprint configures this). The service listens on Render's `PORT` and serves both UI and WebSockets from one origin. Use `/health` for the health check.
 
----
+For other hosts, install `requirements.txt` and start with:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+```
+
+## Five-minute demo script
+
+1. Open the app in two browser windows and join `general` as Ada and Lin.
+2. Show both names in the online list; type in one window to show the typing indicator in the other.
+3. Send a message and show it arriving in both windows immediately.
+4. Leave and rejoin as another name to show message history; close a window to show the presence list update.
+5. Explain that messages persist in SQLite while presence and typing live in the service process. A multi-instance deployment would need shared presence/pub-sub (for example Redis) so users connected to different instances can see each other.
+
+## MVP limits and next steps
+
+This MVP has no accounts or authorization, and usernames are unique only while present in a room. Presence is per process, so run one service instance unless a shared event layer is added. A production follow-up should add authentication, rate limits, stronger operational monitoring, and shared presence/broadcasting.
