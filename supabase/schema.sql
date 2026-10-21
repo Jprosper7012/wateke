@@ -21,21 +21,23 @@ create index if not exists messages_room_created_at_idx
 alter table public.rooms enable row level security;
 alter table public.messages enable row level security;
 
-grant select on public.rooms, public.messages to anon, authenticated;
-grant insert on public.messages to anon, authenticated;
-grant usage, select on sequence public.messages_id_seq to anon, authenticated;
+revoke all on public.rooms, public.messages from anon, authenticated;
+revoke all on sequence public.messages_id_seq from anon, authenticated;
+grant select on public.rooms, public.messages to service_role;
+grant insert on public.messages to service_role;
+grant usage, select on sequence public.messages_id_seq to service_role;
 
 drop policy if exists "Rooms are readable by everyone" on public.rooms;
-create policy "Rooms are readable by everyone"
-  on public.rooms for select to anon, authenticated using (true);
+create policy "Rooms are available to the service"
+  on public.rooms for select to service_role using (true);
 
 drop policy if exists "Messages are readable by everyone" on public.messages;
-create policy "Messages are readable by everyone"
-  on public.messages for select to anon, authenticated using (true);
+create policy "Messages are available to the service"
+  on public.messages for select to service_role using (true);
 
 drop policy if exists "Anyone can post valid room messages" on public.messages;
-create policy "Anyone can post valid room messages"
-  on public.messages for insert to anon, authenticated with check (true);
+create policy "Service can add messages"
+  on public.messages for insert to service_role with check (true);
 
 do $$
 begin

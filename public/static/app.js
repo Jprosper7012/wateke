@@ -1,5 +1,3 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-
 const roomSelect=document.querySelector('#room');
 const joinForm=document.querySelector('#join-form');
 const welcome=document.querySelector('#welcome');
@@ -10,21 +8,15 @@ const notice=document.querySelector('#notice');
 const typingLine=document.querySelector('#typing-line');
 const usersList=document.querySelector('#users');
 const connection=document.querySelector('.connection');
-const rooms=['general','football','music'];
-let supabase=null,channel=null,username='',currentRoom='',typingTimer=null;
-let typingUsers=new Set(),lastTypingSent=0;
+let socket=null,username='',currentRoom='',typingTimer=null,reconnectTimer=null;
+let shouldReconnect=false,reconnectDelay=1000,typingUsers=new Set(),lastTypingSent=0;
 
-function showNotice(text){notice.textContent=text;window.clearTimeout(showNotice.timer);showNotice.timer=window.setTimeout(()=>notice.textContent='',4000);}
+function showNotice(text){notice.textContent=text;window.clearTimeout(showNotice.timer);showNotice.timer=window.setTimeout(()=>notice.textContent='',5000);}
 function setConnected(connected){connection.classList.toggle('online',connected);document.querySelector('#connection-label').textContent=connected?'Connected':'Disconnected';}
 function renderUsers(names){
   document.querySelector('#user-count').textContent=names.length;usersList.replaceChildren();
   if(!names.length){const empty=document.createElement('li');empty.className='empty-users';empty.textContent='No one is here yet';usersList.append(empty);return;}
   names.forEach(name=>{const item=document.createElement('li'),avatar=document.createElement('span'),label=document.createElement('span');avatar.className='avatar';avatar.textContent=name.slice(0,1).toUpperCase();label.textContent=name+(name===username?' (you)':'');item.append(avatar,label);usersList.append(item);});
-}
-function syncPresence(){
-  const state=channel?.presenceState()||{};
-  const names=Object.values(state).flat().map(entry=>entry.username).filter(Boolean);
-  renderUsers([...new Set(names)].sort((a,b)=>a.localeCompare(b)));
 }
 function addMessage(message){
   if(document.querySelector(`[data-message-id="${CSS.escape(String(message.id))}"]`))return;
@@ -35,70 +27,71 @@ function addMessage(message){
   [...messages.children].sort((first,second)=>Number(first.dataset.messageId)-Number(second.dataset.messageId)).forEach(node=>messages.append(node));
   messages.scrollTop=messages.scrollHeight;
 }
-async function sendTyping(isTyping){
-  if(channel)await channel.send({type:'broadcast',event:'typing',payload:{username,is_typing:isTyping}});
+function sendTyping(isTyping){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'typing',is_typing:isTyping}));}
+function closeRoom(){
+  shouldReconnect=false;window.clearTimeout(reconnectTimer);window.clearTimeout(typingTimer);
+  const oldSocket=socket;socket=null;if(oldSocket)oldSocket.close();
+  setConnected(false);renderUsers([]);typingUsers.clear();typingLine.textContent='';
 }
-async function leaveRoom(){
-  const oldChannel=channel;channel=null;typingUsers.clear();typingLine.textContent='';
-  if(oldChannel&&supabase){await oldChannel.untrack();await supabase.removeChannel(oldChannel);}
-  setConnected(false);renderUsers([]);
-}
-async function joinRoom(event){
-  event.preventDefault();
-  username=document.querySelector('#username').value.trim();currentRoom=roomSelect.value;
-  if(!username||username.length>20)return showNotice('Name must be between 1 and 20 characters.');
-  if(!supabase)return showNotice('Chat setup is incomplete. Check the deployment environment variables.');
-  await leaveRoom();messages.replaceChildren();typingUsers.clear();setConnected(false);
-  channel=supabase.channel(`room:${currentRoom}`,{config:{presence:{key:crypto.randomUUID()},broadcast:{self:false}}})
-    .on('presence',{event:'sync'},syncPresence)
-    .on('broadcast',{event:'typing'},({payload})=>{
-      if(payload.username===username)return;
-      if(payload.is_typing)typingUsers.add(payload.username);else typingUsers.delete(payload.username);
-      typingLine.textContent=typingUsers.size?`${[...typingUsers].join(', ')} ${typingUsers.size===1?'is':'are'} typing…`:'';
-    })
-    .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages',filter:`room=eq.${currentRoom}`},({new:message})=>addMessage(message));
-  const activeChannel=channel;
-  activeChannel.subscribe(async status=>{
-    if(activeChannel!==channel)return;
-    if(status==='SUBSCRIBED'){
-      const names=Object.values(activeChannel.presenceState()).flat().map(entry=>entry.username).filter(Boolean);
-      if(names.some(name=>name.toLocaleLowerCase()===username.toLocaleLowerCase())){
-        showNotice('That name is already in this room.');await leaveRoom();return;
-      }
-      const tracked=await activeChannel.track({username,online_at:new Date().toISOString()});
-      if(tracked==='ok'){
-        welcome.hidden=true;messages.style.display='flex';composer.hidden=false;document.querySelector('#leave-button').hidden=false;
-        document.querySelector('#room-heading').textContent=currentRoom[0].toUpperCase()+currentRoom.slice(1);setConnected(true);
-        const {data,error}=await supabase.from('messages').select('id,room,username,text,created_at').eq('room',currentRoom).order('id',{ascending:false}).limit(50);
-        if(error)showNotice('Could not load message history. Check the Supabase table policies.');
-        else data.reverse().forEach(addMessage);
-      }else{showNotice('Could not join presence for this room.');await leaveRoom();}
-    }else if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)){
-      setConnected(false);showNotice('Realtime connection failed. Check Supabase Realtime settings.');
-    }
+function connect(){
+  if(!shouldReconnect)return;
+  const scheme=location.protocol==='https:'?'wss:':'ws:';
+  const nextSocket=new WebSocket(`${scheme}//${location.host}/ws`);socket=nextSocket;setConnected(false);
+  nextSocket.addEventListener('open',()=>{
+    if(nextSocket!==socket)return;
+    nextSocket.send(JSON.stringify({type:'join_room',username,room:currentRoom}));
   });
+  nextSocket.addEventListener('message',event=>{
+    if(nextSocket!==socket)return;
+    let data;try{data=JSON.parse(event.data);}catch{return;}
+    if(data.type==='history'){
+      messages.replaceChildren();data.messages.forEach(addMessage);welcome.hidden=true;messages.style.display='flex';
+      composer.hidden=false;document.querySelector('#leave-button').hidden=false;
+      document.querySelector('#room-heading').textContent=currentRoom[0].toUpperCase()+currentRoom.slice(1);
+      setConnected(true);reconnectDelay=1000;
+    }else if(data.type==='message')addMessage(data);
+    else if(data.type==='presence_update')renderUsers(data.users);
+    else if(data.type==='typing'){
+      if(data.username===username)return;
+      if(data.is_typing)typingUsers.add(data.username);else typingUsers.delete(data.username);
+      typingLine.textContent=typingUsers.size?`${[...typingUsers].join(', ')} ${typingUsers.size===1?'is':'are'} typing…`:'';
+    }else if(data.type==='ping')nextSocket.send(JSON.stringify({type:'pong'}));
+    else if(data.type==='error'){showNotice(data.message);shouldReconnect=false;nextSocket.close();}
+  });
+  nextSocket.addEventListener('close',()=>{
+    if(nextSocket!==socket)return;
+    setConnected(false);
+    if(shouldReconnect){
+      showNotice('Connection interrupted. Reconnecting…');
+      reconnectTimer=window.setTimeout(connect,reconnectDelay);reconnectDelay=Math.min(reconnectDelay*2,15000);
+    }else if(!welcome.hidden){return;}
+    else{composer.hidden=true;document.querySelector('#leave-button').hidden=true;showNotice('Disconnected from chat. Join again to continue.');}
+  });
+  nextSocket.addEventListener('error',()=>showNotice('Could not connect to chat. Check the WebSocket deployment.'));
 }
-
-rooms.forEach(room=>{const option=document.createElement('option');option.value=room;option.textContent=room[0].toUpperCase()+room.slice(1);roomSelect.append(option);});
-joinForm.addEventListener('submit',joinRoom);
-composer.addEventListener('submit',async event=>{
-  event.preventDefault();const text=messageInput.value.trim();if(!text||!channel)return;
-  const {error}=await supabase.from('messages').insert({room:currentRoom,username,text});
-  if(error)showNotice(error.message.includes('messages')?'Message rejected. Check the database policies.':'Could not send message. Try again.');
-  else{messageInput.value='';document.querySelector('#char-count').textContent='0 / 500';window.clearTimeout(typingTimer);sendTyping(false);}
+async function loadRooms(){
+  try{
+    const response=await fetch('/rooms');if(!response.ok)throw new Error('Room list unavailable');
+    const data=await response.json();roomSelect.replaceChildren(...data.rooms.map(room=>{const option=document.createElement('option');option.value=room;option.textContent=room[0].toUpperCase()+room.slice(1);return option;}));
+  }catch{showNotice('Could not load rooms. Refresh and try again.');}
+}
+joinForm.addEventListener('submit',event=>{
+  event.preventDefault();username=document.querySelector('#username').value.trim();currentRoom=roomSelect.value;
+  if(!username||username.length>20)return showNotice('Name must be between 1 and 20 characters.');
+  closeRoom();messages.replaceChildren();shouldReconnect=true;connect();
+});
+composer.addEventListener('submit',event=>{
+  event.preventDefault();const text=messageInput.value.trim();if(!text||socket?.readyState!==WebSocket.OPEN)return;
+  socket.send(JSON.stringify({type:'send_message',text}));messageInput.value='';document.querySelector('#char-count').textContent='0 / 500';sendTyping(false);
 });
 messageInput.addEventListener('input',()=>{
   document.querySelector('#char-count').textContent=`${messageInput.value.length} / 500`;
-  if(channel&&Date.now()-lastTypingSent>800){sendTyping(true);lastTypingSent=Date.now();}
+  if(socket?.readyState===WebSocket.OPEN&&Date.now()-lastTypingSent>800){sendTyping(true);lastTypingSent=Date.now();}
   window.clearTimeout(typingTimer);typingTimer=window.setTimeout(()=>sendTyping(false),1200);
 });
-document.querySelector('#leave-button').addEventListener('click',async()=>{
-  await leaveRoom();welcome.hidden=false;messages.style.display='none';messages.replaceChildren();composer.hidden=true;
+document.querySelector('#leave-button').addEventListener('click',()=>{
+  closeRoom();welcome.hidden=false;messages.style.display='none';messages.replaceChildren();composer.hidden=true;
   document.querySelector('#leave-button').hidden=true;document.querySelector('#room-heading').textContent='Join a room';
 });
 
-try{
-  const response=await fetch('/api/config');
-  if(!response.ok)throw new Error('Missing Supabase configuration');
-  const config=await response.json();supabase=createClient(config.supabaseUrl,config.supabaseKey);
-}catch{showNotice('Chat is not configured yet. Add the Supabase URL and publishable key in Vercel settings.');}
+loadRooms();
