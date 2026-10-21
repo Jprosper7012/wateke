@@ -8,7 +8,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
 from app import database
@@ -44,7 +43,6 @@ async def publish(redis: Redis, room: str, event: dict) -> None:
 
 
 app = FastAPI(title="The Hive Realtime Chat")
-app.mount("/static", StaticFiles(directory=PUBLIC_DIR / "static"), name="static")
 
 
 @app.get("/")
