@@ -179,6 +179,7 @@ async def websocket_chat(socket: WebSocket):
                     message = await database.add_message(room, username, text.strip())
                     await publish(redis, room, {"type": "message", **message,
                                                 "sender_id": connection_id})
+                    await send({"type": "message", **message})
                 except Exception:
                     await send({"type": "error", "message": "Message could not be saved"})
             elif event.get("type") == "typing":

@@ -99,7 +99,10 @@ def test_two_clients_exchange_message_and_load_history(monkeypatch):
             assert lin.receive_json()["users"] == ["Ada", "Lin"]
             assert ada.receive_json()["users"] == ["Ada", "Lin"]
             ada.send_json({"type": "send_message", "text": "Hello, room!"})
+            sent_event = ada.receive_json()
             event = lin.receive_json()
+            assert sent_event["type"] == "message"
+            assert (sent_event["username"], sent_event["text"]) == ("Ada", "Hello, room!")
             assert event["type"] == "message"
             assert (event["username"], event["text"]) == ("Ada", "Hello, room!")
 
