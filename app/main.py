@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -19,6 +20,7 @@ USERNAME_RE = re.compile(r"[^\x00-\x1f]{1,20}")
 MAX_MESSAGE_LENGTH = 500
 PRESENCE_TTL_SECONDS = 45
 redis_client: Redis | None = None
+logger = logging.getLogger(__name__)
 
 
 def get_redis() -> Redis:
@@ -117,9 +119,16 @@ async def websocket_chat(socket: WebSocket):
             member = f"{connection_id}:{username}"
             await redis.zadd(presence_key, {member: time.time()})
             await redis.expire(presence_key, PRESENCE_TTL_SECONDS * 2)
+        except Exception:
+            logger.exception("Redis chat initialization failed")
+            await send({"type": "error", "message": "Realtime service is unavailable"})
+            return
+
+        try:
             history = await database.get_history(room)
         except Exception:
-            await send({"type": "error", "message": "Realtime or chat storage is unavailable"})
+            logger.exception("Supabase message history request failed")
+            await send({"type": "error", "message": "Chat history is unavailable"})
             return
 
         await send({"type": "history", "room": room, "messages": history})
