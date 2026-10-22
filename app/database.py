@@ -47,3 +47,17 @@ async def get_history(room: str, limit: int = 50) -> list[dict]:
     return list(reversed(response.json()))
 
 
+async def add_message(room: str, username: str, text: str) -> dict:
+    base_url, secret_key, legacy_service_key = _settings()
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            f"{base_url}/rest/v1/messages",
+            params={"select": "id,room,username,text,created_at"},
+            headers={**_headers(secret_key, legacy_service_key), "Prefer": "return=representation"},
+            json={"room": room, "username": username, "text": text},
+        )
+    response.raise_for_status()
+    rows = response.json()
+    if not rows:
+        raise RuntimeError("Message insert returned no row")
+    return rows[0]
