@@ -15,10 +15,6 @@ create table if not exists public.messages (
   constraint username_has_no_control_chars check (username !~ '[[:cntrl:]]')
 );
 
--- Keep per-browser ownership private to the service so authors can delete their own posts.
-alter table public.messages add column if not exists owner_token uuid;
-alter table public.messages add column if not exists reply_to bigint references public.messages(id) on delete set null;
-
 create index if not exists messages_room_created_at_idx
   on public.messages (room, created_at desc);
 
@@ -29,7 +25,6 @@ revoke all on public.rooms, public.messages from anon, authenticated;
 revoke all on sequence public.messages_id_seq from anon, authenticated;
 grant select on public.rooms, public.messages to service_role;
 grant insert on public.messages to service_role;
-grant delete on public.messages to service_role;
 grant usage, select on sequence public.messages_id_seq to service_role;
 
 drop policy if exists "Rooms are readable by everyone" on public.rooms;
