@@ -28,7 +28,7 @@ async def get_rooms() -> list[str]:
         response = await client.get(
             f"{base_url}/rest/v1/rooms",
             params={"select": "name", "order": "name.asc"},
-            headers=_headers(secret_key, legacy_service_key),
+            headers={**_headers(secret_key, legacy_service_key), "Prefer": "return=representation"},
         )
     response.raise_for_status()
     return [row["name"] for row in response.json()]
@@ -39,7 +39,7 @@ async def get_history(room: str, limit: int = 50) -> list[dict]:
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(
             f"{base_url}/rest/v1/messages",
-            params={"select": "id,room,username,text,created_at", "room": f"eq.{room}",
+            params={"select": "id,room,username,text,created_at,reply_to", "room": f"eq.{room}",
                     "order": "id.desc", "limit": limit},
             headers=_headers(secret_key, legacy_service_key),
         )
@@ -47,17 +47,32 @@ async def get_history(room: str, limit: int = 50) -> list[dict]:
     return list(reversed(response.json()))
 
 
-async def add_message(room: str, username: str, text: str) -> dict:
+async def add_message(room: str, username: str, text: str, owner_token: str,
+                      reply_to: int | None = None) -> dict:
     base_url, secret_key, legacy_service_key = _settings()
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.post(
             f"{base_url}/rest/v1/messages",
-            params={"select": "id,room,username,text,created_at"},
+            params={"select": "id,room,username,text,created_at,reply_to"},
             headers={**_headers(secret_key, legacy_service_key), "Prefer": "return=representation"},
-            json={"room": room, "username": username, "text": text},
+            json={"room": room, "username": username, "text": text,
+                  "owner_token": owner_token, "reply_to": reply_to},
         )
     response.raise_for_status()
     rows = response.json()
     if not rows:
         raise RuntimeError("Message insert returned no row")
     return rows[0]
+
+
+async def delete_message(message_id: int, room: str, owner_token: str) -> bool:
+    base_url, secret_key, legacy_service_key = _settings()
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.delete(
+            f"{base_url}/rest/v1/messages",
+            params={"id": f"eq.{message_id}", "room": f"eq.{room}",
+                    "owner_token": f"eq.{owner_token}", "select": "id"},
+            headers={**_headers(secret_key, legacy_service_key), "Prefer": "return=representation"},
+        )
+    response.raise_for_status()
+    return bool(response.json())

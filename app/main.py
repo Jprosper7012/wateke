@@ -92,10 +92,16 @@ async def websocket_chat(socket: WebSocket):
             return
 
         raw_username = first.get("username")
+        owner_token = first.get("owner_token")
         requested_room = first.get("room")
         username = raw_username.strip() if isinstance(raw_username, str) else ""
         if not USERNAME_RE.fullmatch(username):
             await send({"type": "error", "message": "Username must be 1–20 characters"})
+            return
+        try:
+            owner_token = str(uuid.UUID(owner_token))
+        except (ValueError, TypeError, AttributeError):
+            await send({"type": "error", "message": "Invalid message ownership token"})
             return
         try:
             room_names = await database.get_rooms()
@@ -176,12 +182,32 @@ async def websocket_chat(socket: WebSocket):
                     await send({"type": "error", "message": "Message cannot exceed 500 characters"})
                     continue
                 try:
-                    message = await database.add_message(room, username, text.strip())
+                    reply_to = event.get("reply_to")
+                    if reply_to is not None and (not isinstance(reply_to, int) or reply_to < 1):
+                        await send({"type": "error", "message": "Invalid reply target"})
+                        continue
+                    message = await database.add_message(room, username, text.strip(), owner_token, reply_to)
                     await publish(redis, room, {"type": "message", **message,
                                                 "sender_id": connection_id})
                     await send({"type": "message", **message})
                 except Exception:
                     await send({"type": "error", "message": "Message could not be saved"})
+            elif event.get("type") == "delete_message":
+                message_id = event.get("id")
+                if not isinstance(message_id, int) or message_id < 1:
+                    await send({"type": "error", "message": "Invalid message"})
+                    continue
+                try:
+                    deleted = await database.delete_message(message_id, room, owner_token)
+                    if deleted:
+                        payload = {"type": "message_deleted", "id": message_id,
+                                   "sender_id": connection_id}
+                        await publish(redis, room, payload)
+                        await send({"type": "message_deleted", "id": message_id})
+                    else:
+                        await send({"type": "error", "message": "You can only delete your own messages"})
+                except Exception:
+                    await send({"type": "error", "message": "Message could not be deleted"})
             elif event.get("type") == "typing":
                 is_typing = event.get("is_typing")
                 if isinstance(is_typing, bool):
