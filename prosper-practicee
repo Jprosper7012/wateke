@@ -1,0 +1,43 @@
+import random
+import time
+
+def generate_magic_story():
+    """Generates a silly, completely randomized short story."""
+    heroes = ["a caffeinated squirrel", "a sentient toaster", "a wizard who forgot his glasses", "an ambitious potato"]
+    actions = ["accidental time travel", "a high-stakes game of rock-paper-scissors", "a dramatic dance-off", "stealing the moon"]
+    locations = ["in a neon-lit cyber-swamp", "inside a giant refrigerator", "at the edge of a black hole", "in a local bakery"]
+    consequences = ["gained the ability to speak fluent French.", "was instantly turned into a potted fern.", "won a lifetime supply of tacos.", "became the accidental mayor of Underwater Detroit."]
+
+    hero = random.choice(heroes)
+    action = random.choice(actions)
+    location = random.choice(locations)
+    consequence = random.choice(consequences)
+
+    print("--- 📚 GENERATING A RANDOM STORY ---")
+    time.sleep(1)
+    print(f"Once upon a time, {hero} decided to try {action} {location}.")
+    time.sleep(1.5)
+    print(f"As a direct result of this absolute madness, our hero {consequence}")
+    print("------------------------------------\n")
+
+def simulate_dice_game():
+    """Simulates a quick dice game between you and a computer opponent."""
+    print("--- 🎲 ROLLING THE DICE ---")
+    player_roll = random.randint(1, 6)
+    computer_roll = random.randint(1, 6)
+    
+    print(f"You rolled a: {player_roll}")
+    print(f"The computer rolled a: {computer_roll}")
+    
+    if player_roll > computer_roll:
+        print("🏆 You win! Pure skill.")
+    elif player_roll < computer_roll:
+        print("🤖 The computer wins. Better luck next time.")
+    else:
+        print("🤝 It's a tie! Universal harmony achieved.")
+    print("---------------------------\n")
+
+if __name__ == "__main__":
+    # Execute both random scripts
+    generate_magic_story()
+    simulate_dice_game()
